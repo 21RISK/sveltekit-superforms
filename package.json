@@ -42,10 +42,12 @@
     "test:unit": "vitest",
     "test": "vitest run",
     "lint": "prettier --plugin-search-dir . --check . && eslint .",
-    "format": "prettier --plugin-search-dir . --write ."
+    "format": "prettier --plugin-search-dir . --write .",
+    "postinstall": "npm run package"
   },
   "files": [
-    "dist"
+    "dist",
+    "src"
   ],
   "exports": {
     ".": {
