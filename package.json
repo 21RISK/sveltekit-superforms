@@ -45,10 +45,6 @@
     "format": "prettier --plugin-search-dir . --write .",
     "postinstall": "npm run package"
   },
-  "files": [
-    "dist",
-    "src"
-  ],
   "exports": {
     ".": {
       "types": "./dist/index.d.ts",
