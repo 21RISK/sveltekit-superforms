@@ -84,7 +84,7 @@ function formDataToValidation(data, schemaData, preprocessed, strict) {
         }
     }
     function parseFormDataEntry(field, value, typeInfo) {
-        const newValue = valueOrDefault(value, strict ?? false, true, typeInfo);
+        const newValue = valueOrDefault(value, strict ?? false, typeInfo);
         const zodType = typeInfo.zodType;
         // If the value was empty, it now contains the default value,
         // so it can be returned immediately, unless it's boolean, which
@@ -261,11 +261,11 @@ function validateResult(parsed, schemaData, result) {
             // passthrough, strip, strict
             const zodKeyStatus = unwrappedSchema._def.unknownKeys;
             let data;
-            if (zodKeyStatus == 'passthrough') {
-                data = { ...clone(entityInfo.defaultEntity), ...partialData };
-            }
-            else if (options.strict) {
+            if (options.strict) {
                 data = parsed.data;
+            }
+            else if (zodKeyStatus == 'passthrough') {
+                data = { ...clone(entityInfo.defaultEntity), ...partialData };
             }
             else {
                 data = Object.fromEntries(schemaKeys.map((key) => [
@@ -382,12 +382,18 @@ export async function superValidate(data, schema, options) {
     }
     const { parsed, result } = await parseRequest();
     if (options?.strict) {
+        /*
+        In strict mode, we expect no extra keys in the data.
+        To make the library pure, we therefore have to clone the data.
+        */
+        const parsedClone = structuredClone(parsed);
         for (const key of Object.keys(parsed.data ?? {})) {
             const isKeyInSchema = schemaData.schemaKeys.includes(key);
-            if (!isKeyInSchema && parsed.data) {
-                delete parsed.data[key];
+            if (!isKeyInSchema && parsedClone.data) {
+                delete parsedClone.data[key];
             }
         }
+        return validateResult(parsedClone, schemaData, result);
     }
     return validateResult(parsed, schemaData, result);
 }

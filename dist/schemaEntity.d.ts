@@ -29,7 +29,7 @@ export declare function unwrapZodType(zodType: ZodTypeAny): ZodTypeInfo;
 export declare function entityHash<T extends AnyZodObject>(schema: T): string;
 export declare function _entityHash<T extends ZodTypeAny>(type: T): string;
 export declare function entityData<T extends AnyZodObject>(schema: T, warnings?: SuperValidateOptions<T>['warnings']): Entity<T>;
-export declare function valueOrDefault(value: unknown, strict: boolean, implicitDefaults: true, schemaInfo: ZodTypeInfo): unknown;
+export declare function valueOrDefault(value: unknown, strict: boolean, schemaInfo: ZodTypeInfo): unknown;
 /**
  * Returns the default values for a zod validation schema.
  * The main gotcha is that undefined values are changed to null if the field is nullable.

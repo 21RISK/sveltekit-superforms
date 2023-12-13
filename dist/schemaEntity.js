@@ -128,7 +128,7 @@ const entityCache = new WeakMap();
 function schemaInfo(schema) {
     return _mapSchema(schema, (obj) => unwrapZodType(obj));
 }
-export function valueOrDefault(value, strict, implicitDefaults, schemaInfo) {
+export function valueOrDefault(value, strict, schemaInfo) {
     if (value)
         return value;
     const { zodType, isNullable, isOptional, hasDefault, defaultValue } = schemaInfo;
@@ -146,29 +146,27 @@ export function valueOrDefault(value, strict, implicitDefaults, schemaInfo) {
         return null;
     if (isOptional)
         return undefined;
-    if (implicitDefaults) {
-        if (zodType._def.typeName == 'ZodString')
-            return '';
-        if (zodType._def.typeName == 'ZodNumber')
-            return 0;
-        if (zodType._def.typeName == 'ZodBoolean')
-            return false;
-        // Cannot add default for ZodDate due to https://github.com/Rich-Harris/devalue/issues/51
-        //if (zodType._def.typeName == "ZodDate") return new Date(NaN);
-        if (zodType._def.typeName == 'ZodArray')
-            return [];
-        if (zodType._def.typeName == 'ZodObject') {
-            return defaultValues(zodType);
-        }
-        if (zodType._def.typeName == 'ZodSet')
-            return new Set();
-        if (zodType._def.typeName == 'ZodRecord')
-            return {};
-        if (zodType._def.typeName == 'ZodBigInt')
-            return BigInt(0);
-        if (zodType._def.typeName == 'ZodSymbol')
-            return Symbol();
+    if (zodType._def.typeName == 'ZodString')
+        return '';
+    if (zodType._def.typeName == 'ZodNumber')
+        return 0;
+    if (zodType._def.typeName == 'ZodBoolean')
+        return false;
+    // Cannot add default for ZodDate due to https://github.com/Rich-Harris/devalue/issues/51
+    //if (zodType._def.typeName == "ZodDate") return new Date(NaN);
+    if (zodType._def.typeName == 'ZodArray')
+        return [];
+    if (zodType._def.typeName == 'ZodObject') {
+        return defaultValues(zodType);
     }
+    if (zodType._def.typeName == 'ZodSet')
+        return new Set();
+    if (zodType._def.typeName == 'ZodRecord')
+        return {};
+    if (zodType._def.typeName == 'ZodBigInt')
+        return BigInt(0);
+    if (zodType._def.typeName == 'ZodSymbol')
+        return Symbol();
     return undefined;
 }
 /**
@@ -188,7 +186,7 @@ export function defaultValues(schema) {
     const schemaTypeInfo = schemaInfo(realSchema);
     return Object.fromEntries(fields.map((field) => {
         const typeInfo = schemaTypeInfo[field];
-        const newValue = valueOrDefault(undefined, false, true, typeInfo);
+        const newValue = valueOrDefault(undefined, false, typeInfo);
         return [field, newValue];
     }));
 }
