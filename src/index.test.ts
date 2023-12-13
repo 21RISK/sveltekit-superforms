@@ -827,7 +827,6 @@ describe('Strict tests', () => {
     const schema = z.object({
       foo: z.string()
     })
-    
     const form = await superValidate(input as any, schema, {
       strict: true
     });
