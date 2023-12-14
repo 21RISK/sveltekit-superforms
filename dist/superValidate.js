@@ -168,15 +168,17 @@ function formDataToValidation(data, schemaData, preprocessed, strict) {
  * may still have to be validated if there are side-effects or errors
  * should be displayed.
  */
-function dataToValidate(parsed, schemaData) {
+function dataToValidate(parsed, schemaData, strict) {
     if (!parsed.data) {
         return schemaData.hasEffects || schemaData.opts.errors === true
             ? schemaData.entityInfo.defaultEntity
             : undefined;
     }
-    else {
-        return parsed.data;
+    else if (strict && parsed.dataWithoutDefaults) {
+        return parsed.dataWithoutDefaults;
     }
+    else
+        return parsed.data;
 }
 function parseFormData(formData, schemaData, options) {
     function tryParseSuperJson() {
@@ -196,10 +198,11 @@ function parseFormData(formData, schemaData, options) {
     const data = tryParseSuperJson();
     const id = formData.get('__superform_id')?.toString() ?? undefined;
     return data
-        ? { id, data, posted: true }
+        ? { id, data, posted: true, dataWithoutDefaults: null }
         : {
             id,
-            data: formDataToValidation(formData, schemaData, options?.preprocessed, options?.strict),
+            data: formDataToValidation(formData, schemaData, options?.preprocessed, false),
+            dataWithoutDefaults: formDataToValidation(formData, schemaData, options?.preprocessed, options?.strict),
             posted: true
         };
 }
@@ -343,7 +346,7 @@ export async function superValidate(data, schema, options) {
                 throw e;
             }
             // No data found, return an empty form
-            return { id: undefined, data: undefined, posted: false };
+            return { id: undefined, data: undefined, posted: false, dataWithoutDefaults: undefined };
         }
         return parseFormData(formData, schemaData, options);
     }
@@ -364,16 +367,22 @@ export async function superValidate(data, schema, options) {
             data.request instanceof Request) {
             parsed = await tryParseFormData(data.request);
         }
+        else if (options?.strict) {
+            // Ensure that defaults are set on data if strict mode is enabled (Should this maybe always happen?)
+            const params = new URLSearchParams(data);
+            parsed = parseSearchParams(params, schemaData, options);
+        }
         else {
             parsed = {
                 id: undefined,
                 data: data,
-                posted: false
+                posted: false,
+                dataWithoutDefaults: data
             };
         }
         //////////////////////////////////////////////////////////////////////
         // This logic is shared between superValidate and superValidateSync //
-        const toValidate = dataToValidate(parsed, schemaData);
+        const toValidate = dataToValidate(parsed, schemaData, options?.strict || false);
         const result = toValidate
             ? await schemaData.originalSchema.safeParseAsync(toValidate)
             : undefined;
@@ -381,21 +390,8 @@ export async function superValidate(data, schema, options) {
         return { parsed, result };
     }
     const { parsed, result } = await parseRequest();
-    if (options?.strict) {
-        /*
-        In strict mode, we expect no extra keys in the data.
-        To make the library pure, we therefore have to clone the data.
-        */
-        const parsedClone = structuredClone(parsed);
-        for (const key of Object.keys(parsed.data ?? {})) {
-            const isKeyInSchema = schemaData.schemaKeys.includes(key);
-            if (!isKeyInSchema && parsedClone.data) {
-                delete parsedClone.data[key];
-            }
-        }
-        return validateResult(parsedClone, schemaData, result);
-    }
-    return validateResult(parsed, schemaData, result);
+    const superValidated = validateResult(parsed, schemaData, result);
+    return superValidated;
 }
 /**
  * Validates a Zod schema for usage in a SvelteKit form.
@@ -416,11 +412,12 @@ export function superValidateSync(data, schema, options) {
             : {
                 id: undefined,
                 data: data,
+                dataWithoutDefaults: data,
                 posted: false
             }; // Only schema, null or undefined left
     //////////////////////////////////////////////////////////////////////
     // This logic is shared between superValidate and superValidateSync //
-    const toValidate = dataToValidate(parsed, schemaData);
+    const toValidate = dataToValidate(parsed, schemaData, options?.strict || false);
     const result = toValidate
         ? schemaData.originalSchema.safeParse(toValidate)
         : undefined;
