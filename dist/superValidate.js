@@ -56,9 +56,32 @@ export function setError(form, path, error, options) {
     form.valid = false;
     return fail(options.status ?? 400, { form });
 }
-function formDataToValidation(data, schemaData, preprocessed, strict) {
-    const output = {};
+function formDataToValidation(data, schemaData, preprocessed) {
+    const strictData = {};
+    const parsedData = {};
     const { schemaKeys, entityInfo } = schemaData;
+    for (const key of schemaKeys) {
+        const typeInfo = entityInfo.typeInfo[key];
+        const entries = data.getAll(key);
+        if (!(typeInfo.zodType._def.typeName == 'ZodArray')) {
+            parsedData[key] = parseSingleEntry(key, entries[0], typeInfo);
+        }
+        else {
+            const arrayType = unwrapZodType(typeInfo.zodType._def.type);
+            parsedData[key] = entries.map((e) => parseSingleEntry(key, e, arrayType));
+        }
+        if (!entries.length && !typeInfo.isOptional) {
+            strictData[key] = undefined;
+        }
+        else {
+            strictData[key] = parsedData[key];
+        }
+    }
+    for (const key of Object.keys(strictData)) {
+        if (strictData[key] === undefined)
+            delete strictData[key];
+    }
+    return { parsed: parsedData, partial: strictData };
     function parseSingleEntry(key, entry, typeInfo) {
         if (preprocessed && preprocessed.includes(key)) {
             return entry;
@@ -69,49 +92,36 @@ function formDataToValidation(data, schemaData, preprocessed, strict) {
         }
         return parseFormDataEntry(key, entry, typeInfo);
     }
-    for (const key of schemaKeys) {
-        const typeInfo = entityInfo.typeInfo[key];
-        const entries = data.getAll(key);
-        if (entries.length === 0 && strict && typeInfo.isOptional === false) {
-            continue;
-        }
-        if (!(typeInfo.zodType._def.typeName == 'ZodArray')) {
-            output[key] = parseSingleEntry(key, entries[0], typeInfo);
-        }
-        else {
-            const arrayType = unwrapZodType(typeInfo.zodType._def.type);
-            output[key] = entries.map((e) => parseSingleEntry(key, e, arrayType));
-        }
-    }
     function parseFormDataEntry(field, value, typeInfo) {
-        const newValue = valueOrDefault(value, strict ?? false, typeInfo);
+        const newValue = valueOrDefault(value, typeInfo);
         const zodType = typeInfo.zodType;
+        const typeName = zodType._def.typeName;
         // If the value was empty, it now contains the default value,
         // so it can be returned immediately, unless it's boolean, which
         // means it could have been posted as a checkbox.
-        if (!value && zodType._def.typeName != 'ZodBoolean') {
+        if (!value && typeName != 'ZodBoolean') {
             return newValue;
         }
-        //console.log(`FormData field "${field}" (${zodType._def.typeName}): ${value}`
-        if (zodType._def.typeName == 'ZodString') {
+        //console.log(`FormData field "${field}" (${typeName}): ${value}`
+        if (typeName == 'ZodString') {
             return value;
         }
-        else if (zodType._def.typeName == 'ZodNumber') {
+        else if (typeName == 'ZodNumber') {
             return zodType.isInt
                 ? parseInt(value ?? '', 10)
                 : parseFloat(value ?? '');
         }
-        else if (zodType._def.typeName == 'ZodBoolean') {
+        else if (typeName == 'ZodBoolean') {
             return Boolean(value == 'false' ? '' : value).valueOf();
         }
-        else if (zodType._def.typeName == 'ZodDate') {
+        else if (typeName == 'ZodDate') {
             return new Date(value ?? '');
         }
-        else if (zodType._def.typeName == 'ZodArray') {
+        else if (typeName == 'ZodArray') {
             const arrayType = unwrapZodType(zodType._def.type);
             return parseFormDataEntry(field, value, arrayType);
         }
-        else if (zodType._def.typeName == 'ZodBigInt') {
+        else if (typeName == 'ZodBigInt') {
             try {
                 return BigInt(value ?? '.');
             }
@@ -119,7 +129,7 @@ function formDataToValidation(data, schemaData, preprocessed, strict) {
                 return NaN;
             }
         }
-        else if (zodType._def.typeName == 'ZodLiteral') {
+        else if (typeName == 'ZodLiteral') {
             const literalType = typeof zodType.value;
             if (literalType === 'string')
                 return value;
@@ -131,12 +141,12 @@ function formDataToValidation(data, schemaData, preprocessed, strict) {
                 throw new SuperFormError('Unsupported ZodLiteral type: ' + literalType);
             }
         }
-        else if (zodType._def.typeName == 'ZodUnion' ||
-            zodType._def.typeName == 'ZodEnum' ||
-            zodType._def.typeName == 'ZodAny') {
+        else if (typeName == 'ZodUnion' ||
+            typeName == 'ZodEnum' ||
+            typeName == 'ZodAny') {
             return value;
         }
-        else if (zodType._def.typeName == 'ZodNativeEnum') {
+        else if (typeName == 'ZodNativeEnum') {
             const zodEnum = zodType;
             if (value !== null && value in zodEnum.enum) {
                 const enumValue = zodEnum.enum[value];
@@ -151,17 +161,16 @@ function formDataToValidation(data, schemaData, preprocessed, strict) {
             }
             return undefined;
         }
-        else if (zodType._def.typeName == 'ZodSymbol') {
+        else if (typeName == 'ZodSymbol') {
             return Symbol(String(value));
         }
-        if (zodType._def.typeName == 'ZodObject') {
+        if (typeName == 'ZodObject') {
             throw new SuperFormError(`Object found in form field "${field}". ` +
                 `Set the dataType option to "json" and add use:enhance on the client to use nested data structures. ` +
                 `More information: https://superforms.rocks/concepts/nested-data`);
         }
         throw new SuperFormError('Unsupported Zod default type: ' + zodType.constructor.name);
     }
-    return output;
 }
 /**
  * Check what data to validate. If no parsed data, the default entity
@@ -174,8 +183,8 @@ function dataToValidate(parsed, schemaData, strict) {
             ? schemaData.entityInfo.defaultEntity
             : undefined;
     }
-    else if (strict && parsed.dataWithoutDefaults) {
-        return parsed.dataWithoutDefaults;
+    else if (strict && parsed.partialData) {
+        return parsed.partialData;
     }
     else
         return parsed.data;
@@ -197,14 +206,16 @@ function parseFormData(formData, schemaData, options) {
     }
     const data = tryParseSuperJson();
     const id = formData.get('__superform_id')?.toString() ?? undefined;
-    return data
-        ? { id, data, posted: true, dataWithoutDefaults: null }
-        : {
-            id,
-            data: formDataToValidation(formData, schemaData, options?.preprocessed, false),
-            dataWithoutDefaults: formDataToValidation(formData, schemaData, options?.preprocessed, options?.strict),
-            posted: true
-        };
+    if (data) {
+        return { id, data, posted: true, partialData: null };
+    }
+    const parsed = formDataToValidation(formData, schemaData, options?.preprocessed);
+    return {
+        id,
+        data: parsed.parsed,
+        partialData: parsed.partial,
+        posted: true
+    };
 }
 function parseSearchParams(data, schemaData, options) {
     if (data instanceof URL)
@@ -346,7 +357,12 @@ export async function superValidate(data, schema, options) {
                 throw e;
             }
             // No data found, return an empty form
-            return { id: undefined, data: undefined, posted: false, dataWithoutDefaults: undefined };
+            return {
+                id: undefined,
+                data: undefined,
+                posted: false,
+                partialData: undefined
+            };
         }
         return parseFormData(formData, schemaData, options);
     }
@@ -375,9 +391,9 @@ export async function superValidate(data, schema, options) {
         else {
             parsed = {
                 id: undefined,
-                data: data,
                 posted: false,
-                dataWithoutDefaults: data
+                data: data,
+                partialData: data
             };
         }
         //////////////////////////////////////////////////////////////////////
@@ -412,7 +428,7 @@ export function superValidateSync(data, schema, options) {
             : {
                 id: undefined,
                 data: data,
-                dataWithoutDefaults: data,
+                partialData: data,
                 posted: false
             }; // Only schema, null or undefined left
     //////////////////////////////////////////////////////////////////////

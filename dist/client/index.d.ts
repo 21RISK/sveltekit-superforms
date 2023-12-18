@@ -83,6 +83,11 @@ export type FormOptions<T extends ZodValidation<AnyZodObject>, M> = Partial<{
         noValidationAndConstraints?: boolean;
     };
 }>;
+export declare const defaultOnError: (event: {
+    result: {
+        error: unknown;
+    };
+}) => void;
 type SuperFormSnapshot<T extends AnyZodObject, M = App.Superforms.Message extends never ? any : App.Superforms.Message> = SuperValidated<T, M> & {
     tainted: TaintedFields<T> | undefined;
 };

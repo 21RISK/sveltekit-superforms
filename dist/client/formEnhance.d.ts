@@ -4,7 +4,7 @@ import { type Readable, type Writable } from 'svelte/store';
 import { type TaintedFields, type SuperValidated } from '../index.js';
 import type { z, AnyZodObject } from 'zod';
 import type { Entity } from '../schemaEntity.js';
-import type { FormOptions } from './index.js';
+import { type FormOptions } from './index.js';
 export type FormUpdate = (result: Exclude<ActionResult, {
     type: 'error';
 }>, untaint?: boolean) => Promise<void>;

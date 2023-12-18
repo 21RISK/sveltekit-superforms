@@ -23,15 +23,14 @@ export declare function clientValidation<T extends AnyZodObject, M = unknown>(va
 /**
  * Validate and set/clear object level errors.
  */
-export declare function validateObjectErrors<T extends AnyZodObject, M>(formOptions: FormOptions<T, M>, data: z.infer<T>, Errors: SuperForm<T, M>['errors'], tainted: TaintedFields<UnwrapEffects<T>> | undefined): Promise<void>;
-type ValidationResult<T extends ZodValidation<AnyZodObject>> = {
+export declare function validateObjectErrors<T extends AnyZodObject, M>(formOptions: FormOptions<T, M>, Form: SuperForm<T, M>['form'], Errors: SuperForm<T, M>['errors'], tainted: TaintedFields<UnwrapEffects<T>> | undefined): Promise<void>;
+export type ValidationResult<T extends Record<string, unknown>> = {
     validated: boolean | 'all';
     errors: string[] | undefined;
-    data: SuperForm<T, unknown>['form'] | undefined;
+    data: T | undefined;
 };
 /**
  * Validate a specific form field.
  * @DCI-context
  */
-export declare function validateField<T extends ZodValidation<AnyZodObject>, M>(path: string[], formOptions: FormOptions<T, M>, data: SuperForm<T, M>['form'], Errors: SuperForm<T, M>['errors'], Tainted: SuperForm<T, M>['tainted'], options?: ValidateOptions<unknown, UnwrapEffects<T>>): Promise<ValidationResult<T>>;
-export {};
+export declare function validateField<T extends ZodValidation<AnyZodObject>, M>(path: string[], formOptions: FormOptions<T, M>, data: SuperForm<T, M>['form'], Errors: SuperForm<T, M>['errors'], Tainted: SuperForm<T, M>['tainted'], options?: ValidateOptions<unknown, UnwrapEffects<T>>): Promise<ValidationResult<z.infer<T>>>;

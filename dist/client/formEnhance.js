@@ -5,6 +5,7 @@ import { get } from 'svelte/store';
 import { browser } from '$app/environment';
 import { SuperFormError } from '../index.js';
 import { stringify } from 'devalue';
+import { defaultOnError } from './index.js';
 import { clientValidation, validateField } from './clientValidation.js';
 import { Form } from './form.js';
 import { onDestroy } from 'svelte';
@@ -51,93 +52,100 @@ export function formEnhance(formEl, submitting, delayed, timeout, errs, Form_upd
     enableTaintedForm();
     // Using this type in the function argument causes a type recursion error.
     const errors = errs;
-    async function validateChange(change, event, validityEl) {
+    async function updateCustomValidity(validityEl, event, errors) {
+        if (!options.customValidity)
+            return;
         if (options.validationMethod == 'submit-only')
             return;
-        if (options.customValidity && validityEl) {
-            // Always reset validity, in case it has been validated on the server.
-            if ('setCustomValidity' in validityEl) {
-                validityEl.setCustomValidity('');
-            }
-            if (event == 'input' && options.validationMethod == 'onblur')
-                return;
-            // If event is input but element shouldn't use custom validity,
-            // return immediately since validateField don't have to be called
-            // in this case, validation is happening elsewhere.
-            if (noCustomValidityDataAttribute in validityEl.dataset)
-                if (event == 'input')
-                    return;
-                else
-                    validityEl = null;
+        // Always reset validity, in case it has been validated on the server.
+        if ('setCustomValidity' in validityEl) {
+            validityEl.setCustomValidity('');
         }
-        const result = await validateField(change, options, data, errors, tainted);
-        if (validityEl) {
-            setCustomValidity(validityEl, result.errors);
-        }
-        // NOTE: Uncomment if Zod transformations should be immediately applied, not just when submitting.
-        // Not enabled because it's not great UX, and it's rare to have transforms, which will just result in
-        // redundant store updates.
-        //if (result.data) data.set(result.data);
+        if (event == 'input' && options.validationMethod == 'onblur')
+            return;
+        // If event is input but element shouldn't use custom validity,
+        // return immediately since validateField don't have to be called
+        // in this case, validation is happening elsewhere.
+        if (noCustomValidityDataAttribute in validityEl.dataset)
+            return;
+        setCustomValidity(validityEl, errors);
     }
+    // Called upon an event from a HTML element that affects the form.
+    async function htmlInputChange(change, event, target) {
+        if (options.validationMethod == 'submit-only')
+            return;
+        //console.log('htmlInputChange', change, event, target);
+        const result = await validateField(change, options, data, errors, tainted);
+        // Update data if target exists (immediate is set, refactor please)
+        if (result.data && target)
+            data.set(result.data);
+        if (options.customValidity) {
+            const name = CSS.escape(mergePath(change));
+            const el = formEl.querySelector(`[name="${name}"]`);
+            if (el)
+                updateCustomValidity(el, event, result.errors);
+        }
+    }
+    const immediateInputTypes = ['checkbox', 'radio', 'range'];
     /**
      * Some input fields have timing issues with the stores, need to wait in that case.
      */
-    function timingIssue(el) {
+    function isImmediateInput(el) {
         return (el &&
             (el instanceof HTMLSelectElement ||
                 (el instanceof HTMLInputElement &&
-                    (el.type == 'radio' || el.type == 'checkbox'))));
+                    immediateInputTypes.includes(el.type))));
     }
-    // Add blur event, to check tainted
     async function checkBlur(e) {
         if (options.validationMethod == 'oninput' ||
             options.validationMethod == 'submit-only') {
             return;
         }
-        if (timingIssue(e.target)) {
+        // Wait for changes to update
+        const immediateUpdate = isImmediateInput(e.target);
+        if (immediateUpdate)
             await new Promise((r) => setTimeout(r, 0));
-        }
-        for (const change of get(lastChanges)) {
-            let validityEl = null;
-            if (options.customValidity) {
-                const name = CSS.escape(mergePath(change));
-                validityEl = formEl.querySelector(`[name="${name}"]`);
-            }
-            validateChange(change, 'blur', validityEl);
+        const changes = get(lastChanges);
+        if (!changes.length)
+            return;
+        const target = e.target instanceof HTMLElement ? e.target : null;
+        for (const change of changes) {
+            htmlInputChange(change, 'blur', immediateUpdate ? null : target);
         }
         // Clear last changes after blur (not after input)
         lastChanges.set([]);
     }
-    formEl.addEventListener('focusout', checkBlur);
-    // Add input event, for custom validity
-    async function checkCustomValidity(e) {
+    async function checkInput(e) {
         if (options.validationMethod == 'onblur' ||
             options.validationMethod == 'submit-only') {
             return;
         }
-        if (timingIssue(e.target)) {
+        // Wait for changes to update
+        const immediateUpdate = isImmediateInput(e.target);
+        if (immediateUpdate)
             await new Promise((r) => setTimeout(r, 0));
-        }
-        for (const change of get(lastChanges)) {
-            const name = CSS.escape(mergePath(change));
-            const validityEl = formEl.querySelector(`[name="${name}"]`);
-            if (!validityEl)
-                continue;
+        const changes = get(lastChanges);
+        if (!changes.length)
+            return;
+        const target = e.target instanceof HTMLElement ? e.target : null;
+        for (const change of changes) {
+            const hadErrors = 
             // eslint-disable-next-line @typescript-eslint/no-explicit-any
-            const hadErrors = traversePath(get(errors), change);
-            if (hadErrors && hadErrors.key in hadErrors.parent) {
+            immediateUpdate || traversePath(get(errors), change);
+            if (immediateUpdate ||
+                (typeof hadErrors == 'object' && hadErrors.key in hadErrors.parent)) {
                 // Problem - store hasn't updated here with new value yet.
-                setTimeout(() => validateChange(change, 'input', validityEl), 0);
+                setTimeout(() => htmlInputChange(change, 'input', immediateUpdate ? target : null), 0);
             }
         }
     }
-    if (options.customValidity) {
-        formEl.addEventListener('input', checkCustomValidity);
-    }
+    formEl.addEventListener('focusout', checkBlur);
+    formEl.addEventListener('input', checkInput);
     onDestroy(() => {
         formEl.removeEventListener('focusout', checkBlur);
-        formEl.removeEventListener('input', checkCustomValidity);
+        formEl.removeEventListener('input', checkInput);
     });
+    ///// SvelteKit enhance function //////////////////////////////////
     const htmlForm = Form(formEl, { submitting, delayed, timeout }, options);
     let currentRequest;
     return enhance(formEl, async (submit) => {
@@ -171,12 +179,12 @@ export function formEnhance(formEl, submitting, delayed, timeout, errs, Form_upd
         }
         else {
             // Client validation
-            const validation = await clientValidation(formEl.noValidate ||
-                ((submit.submitter instanceof HTMLButtonElement ||
-                    submit.submitter instanceof HTMLInputElement) &&
-                    submit.submitter.formNoValidate)
-                ? undefined
-                : options.validators, get(data), get(formId), get(constraints), get(posted));
+            const noValidate = !options.SPA &&
+                (formEl.noValidate ||
+                    ((submit.submitter instanceof HTMLButtonElement ||
+                        submit.submitter instanceof HTMLInputElement) &&
+                        submit.submitter.formNoValidate));
+            const validation = await clientValidation(noValidate ? undefined : options.validators, get(data), get(formId), get(constraints), get(posted));
             if (!validation.valid) {
                 cancel(false);
                 const result = {
@@ -258,7 +266,14 @@ export function formEnhance(formEl, submitting, delayed, timeout, errs, Form_upd
             return chunks;
         }
         async function validationResponse(event) {
-            const result = event.result;
+            // Check if an error was thrown in hooks, in which case it has no type.
+            const result = event.result.type
+                ? event.result
+                : {
+                    type: 'error',
+                    status: 500,
+                    error: event.result
+                };
             currentRequest = null;
             let cancelled = false;
             const data = {
@@ -328,9 +343,12 @@ export function formEnhance(formEl, submitting, delayed, timeout, errs, Form_upd
                         // Check if the error message should be replaced
                         if (options.onError !== 'apply') {
                             const data = { result, message };
-                            for (const event of formEvents.onError) {
-                                if (event !== 'apply')
-                                    await event(data);
+                            for (const onErrorEvent of formEvents.onError) {
+                                if (onErrorEvent !== 'apply' &&
+                                    (onErrorEvent != defaultOnError ||
+                                        !options.flashMessage?.onError)) {
+                                    await onErrorEvent(data);
+                                }
                             }
                         }
                     }

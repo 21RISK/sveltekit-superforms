@@ -29,29 +29,33 @@ export function unwrapZodType(zodType) {
     //let i = 0;
     while (_wrapped) {
         //console.log(' '.repeat(++i * 2) + zodType.constructor.name);
-        if (zodType._def.typeName == 'ZodNullable') {
-            isNullable = true;
-            zodType = zodType.unwrap();
-        }
-        else if (zodType._def.typeName == 'ZodDefault') {
-            hasDefault = true;
-            defaultValue = zodType._def.defaultValue();
-            zodType = zodType._def.innerType;
-        }
-        else if (zodType._def.typeName == 'ZodOptional') {
-            isOptional = true;
-            zodType = zodType.unwrap();
-        }
-        else if (zodType._def.typeName == 'ZodEffects') {
-            if (!effects)
-                effects = zodType;
-            zodType = zodType._def.schema;
-        }
-        else if (zodType._def.typeName == 'ZodPipeline') {
-            zodType = zodType._def.out;
-        }
-        else {
-            _wrapped = false;
+        switch (zodType._def.typeName) {
+            case 'ZodNullable':
+                isNullable = true;
+                zodType = zodType.unwrap();
+                break;
+            case 'ZodDefault':
+                hasDefault = true;
+                defaultValue = zodType._def.defaultValue();
+                zodType = zodType._def.innerType;
+                break;
+            case 'ZodOptional':
+                isOptional = true;
+                zodType = zodType.unwrap();
+                break;
+            case 'ZodEffects':
+                if (!effects)
+                    effects = zodType;
+                zodType = zodType._def.schema;
+                break;
+            case 'ZodPipeline':
+                zodType = zodType._def.out;
+                break;
+            case 'ZodBranded':
+                zodType = zodType.unwrap();
+                break;
+            default:
+                _wrapped = false;
         }
     }
     return {
@@ -128,7 +132,7 @@ const entityCache = new WeakMap();
 function schemaInfo(schema) {
     return _mapSchema(schema, (obj) => unwrapZodType(obj));
 }
-export function valueOrDefault(value, strict, schemaInfo) {
+export function valueOrDefault(value, schemaInfo) {
     if (value)
         return value;
     const { zodType, isNullable, isOptional, hasDefault, defaultValue } = schemaInfo;
@@ -138,8 +142,6 @@ export function valueOrDefault(value, strict, schemaInfo) {
     // In the database, null is assumed if no other value (undefined doesn't exist there),
     // so this should be ok.
     // Also make a check for strict, so empty strings from FormData can also be set here.
-    if (strict)
-        return value;
     if (hasDefault)
         return defaultValue;
     if (isNullable)
@@ -186,7 +188,7 @@ export function defaultValues(schema) {
     const schemaTypeInfo = schemaInfo(realSchema);
     return Object.fromEntries(fields.map((field) => {
         const typeInfo = schemaTypeInfo[field];
-        const newValue = valueOrDefault(undefined, false, typeInfo);
+        const newValue = valueOrDefault(undefined, typeInfo);
         return [field, newValue];
     }));
 }

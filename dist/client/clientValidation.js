@@ -119,13 +119,13 @@ async function _clientValidation(validators, checkData, formId, constraints, pos
 /**
  * Validate and set/clear object level errors.
  */
-export async function validateObjectErrors(formOptions, data, Errors, tainted) {
+export async function validateObjectErrors(formOptions, Form, Errors, tainted) {
     if (typeof formOptions.validators !== 'object' ||
         !('safeParseAsync' in formOptions.validators)) {
         return;
     }
     const validators = formOptions.validators;
-    const result = await validators.safeParseAsync(data);
+    const result = await validators.safeParseAsync(get(Form));
     if (!result.success) {
         const newErrors = mapErrors(result.error.format(), errorShape(validators));
         Errors.update((currentErrors) => {
@@ -162,6 +162,8 @@ export async function validateObjectErrors(formOptions, data, Errors, tainted) {
             });
             return currentErrors;
         });
+        // Disable if form values shouldn't be updated immediately:
+        //if (result.data) Form.set(result.data);
     }
 }
 /**
@@ -198,25 +200,23 @@ export async function validateField(path, formOptions, data, Errors, Tainted, op
         }
         return errorMsgs ?? undefined;
     }
-    const errors = await _validateField(path, formOptions.validators, data, Errors, Tainted, options);
-    if (errors.validated) {
-        if (errors.validated === 'all' && !errors.errors) {
+    const result = await _validateField(path, formOptions.validators, data, Errors, Tainted, options);
+    if (result.validated) {
+        if (result.validated === 'all' && !result.errors) {
             // We validated the whole data structure, so clear all errors on success after delayed validators.
             // it will also set the current path to undefined, so it can be used in
             // the tainted+error check in oninput.
             Errors_clear();
         }
         else {
-            errors.errors = Errors_update(errors.errors);
-            return errors;
+            result.errors = Errors_update(result.errors);
         }
     }
-    else if (errors.validated === false &&
+    else if (result.validated === false &&
         formOptions.defaultValidator == 'clear') {
-        errors.errors = Errors_update(errors.errors);
-        return errors;
+        result.errors = Errors_update(result.errors);
     }
-    return errors;
+    return result;
 }
 // @DCI-context
 async function _validateField(path, validators, data, Errors, Tainted, options = {}) {
