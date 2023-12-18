@@ -24,6 +24,8 @@ import { traversePath } from './traversal.js';
 import type {
   z,
   AnyZodObject,
+  ZodBranded,
+  ZodTypeAny,
   ZodNumber,
   ZodLiteral,
   ZodNativeEnum,
@@ -154,11 +156,37 @@ export function setError<T extends ZodValidation<AnyZodObject>>(
 function formDataToValidation<T extends AnyZodObject>(
   data: FormData,
   schemaData: SchemaData<T>,
-  preprocessed?: (keyof z.infer<T>)[],
-  strict?: boolean
-) {
-  const output: Record<string, unknown> = {};
+  preprocessed?: (keyof z.infer<T>)[]
+): { partial: Partial<z.infer<T>>; parsed: z.infer<T> } {
+  const strictData: Record<string, unknown> = {};
+  const parsedData: Record<string, unknown> = {};
   const { schemaKeys, entityInfo } = schemaData;
+
+  for (const key of schemaKeys) {
+    const typeInfo = entityInfo.typeInfo[key];
+    const entries = data.getAll(key);
+
+    if (!(typeInfo.zodType._def.typeName == 'ZodArray')) {
+      parsedData[key] = parseSingleEntry(key, entries[0], typeInfo);
+    } else {
+      const arrayType = unwrapZodType(typeInfo.zodType._def.type);
+      parsedData[key] = entries.map((e) =>
+        parseSingleEntry(key, e, arrayType)
+      );
+    }
+
+    if (!entries.length && !typeInfo.isOptional) {
+      strictData[key] = undefined;
+    } else {
+      strictData[key] = parsedData[key];
+    }
+  }
+
+  for (const key of Object.keys(strictData)) {
+    if (strictData[key] === undefined) delete strictData[key];
+  }
+
+  return { parsed: parsedData, partial: strictData };
 
   function parseSingleEntry(
     key: string,
@@ -177,59 +205,44 @@ function formDataToValidation<T extends AnyZodObject>(
     return parseFormDataEntry(key, entry, typeInfo);
   }
 
-  for (const key of schemaKeys) {
-    const typeInfo = entityInfo.typeInfo[key];
-    const entries = data.getAll(key);
-
-    if (entries.length === 0 && strict && typeInfo.isOptional === false) {
-      continue;
-    }
-
-    if (!(typeInfo.zodType._def.typeName == 'ZodArray')) {
-      output[key] = parseSingleEntry(key, entries[0], typeInfo);
-    } else {
-      const arrayType = unwrapZodType(typeInfo.zodType._def.type);
-      output[key] = entries.map((e) => parseSingleEntry(key, e, arrayType));
-    }
-  }
-
   function parseFormDataEntry(
     field: string,
     value: string | null,
     typeInfo: ZodTypeInfo
   ): unknown {
-    const newValue = valueOrDefault(value, strict ?? false, typeInfo);
+    const newValue = valueOrDefault(value, typeInfo);
     const zodType = typeInfo.zodType;
+    const typeName = zodType._def.typeName;
 
     // If the value was empty, it now contains the default value,
     // so it can be returned immediately, unless it's boolean, which
     // means it could have been posted as a checkbox.
-    if (!value && zodType._def.typeName != 'ZodBoolean') {
+    if (!value && typeName != 'ZodBoolean') {
       return newValue;
     }
 
-    //console.log(`FormData field "${field}" (${zodType._def.typeName}): ${value}`
+    //console.log(`FormData field "${field}" (${typeName}): ${value}`
 
-    if (zodType._def.typeName == 'ZodString') {
+    if (typeName == 'ZodString') {
       return value;
-    } else if (zodType._def.typeName == 'ZodNumber') {
+    } else if (typeName == 'ZodNumber') {
       return (zodType as ZodNumber).isInt
         ? parseInt(value ?? '', 10)
         : parseFloat(value ?? '');
-    } else if (zodType._def.typeName == 'ZodBoolean') {
+    } else if (typeName == 'ZodBoolean') {
       return Boolean(value == 'false' ? '' : value).valueOf();
-    } else if (zodType._def.typeName == 'ZodDate') {
+    } else if (typeName == 'ZodDate') {
       return new Date(value ?? '');
-    } else if (zodType._def.typeName == 'ZodArray') {
+    } else if (typeName == 'ZodArray') {
       const arrayType = unwrapZodType(zodType._def.type);
       return parseFormDataEntry(field, value, arrayType);
-    } else if (zodType._def.typeName == 'ZodBigInt') {
+    } else if (typeName == 'ZodBigInt') {
       try {
         return BigInt(value ?? '.');
       } catch {
         return NaN;
       }
-    } else if (zodType._def.typeName == 'ZodLiteral') {
+    } else if (typeName == 'ZodLiteral') {
       const literalType = typeof (zodType as ZodLiteral<unknown>).value;
 
       if (literalType === 'string') return value;
@@ -241,12 +254,12 @@ function formDataToValidation<T extends AnyZodObject>(
         );
       }
     } else if (
-      zodType._def.typeName == 'ZodUnion' ||
-      zodType._def.typeName == 'ZodEnum' ||
-      zodType._def.typeName == 'ZodAny'
+      typeName == 'ZodUnion' ||
+      typeName == 'ZodEnum' ||
+      typeName == 'ZodAny'
     ) {
       return value;
-    } else if (zodType._def.typeName == 'ZodNativeEnum') {
+    } else if (typeName == 'ZodNativeEnum') {
       const zodEnum = zodType as ZodNativeEnum<EnumLike>;
 
       if (value !== null && value in zodEnum.enum) {
@@ -260,11 +273,11 @@ function formDataToValidation<T extends AnyZodObject>(
         return value;
       }
       return undefined;
-    } else if (zodType._def.typeName == 'ZodSymbol') {
+    } else if (typeName == 'ZodSymbol') {
       return Symbol(String(value));
     }
 
-    if (zodType._def.typeName == 'ZodObject') {
+    if (typeName == 'ZodObject') {
       throw new SuperFormError(
         `Object found in form field "${field}". ` +
           `Set the dataType option to "json" and add use:enhance on the client to use nested data structures. ` +
@@ -276,8 +289,6 @@ function formDataToValidation<T extends AnyZodObject>(
       'Unsupported Zod default type: ' + zodType.constructor.name
     );
   }
-
-  return output as z.infer<T>;
 }
 
 ///// superValidate helpers /////////////////////////////////////////
@@ -291,11 +302,12 @@ type SchemaData<T extends AnyZodObject> = {
   opts: SuperValidateOptions<T>;
 };
 
-type ParsedData = {
+type ParsedData<T extends Record<string, unknown>> = {
   id: string | undefined;
   posted: boolean;
-  data: Record<string, unknown> | null | undefined;
-  dataWithoutDefaults: Record<string, unknown> | null | undefined;
+  data: T | null | undefined;
+  // Used in strict mode
+  partialData: Partial<T> | null | undefined;
 };
 
 /**
@@ -304,7 +316,7 @@ type ParsedData = {
  * should be displayed.
  */
 function dataToValidate<T extends AnyZodObject>(
-  parsed: ParsedData,
+  parsed: ParsedData<z.infer<T>>,
   schemaData: SchemaData<T>,
   strict: boolean
 ): Record<string, unknown> | undefined {
@@ -312,8 +324,8 @@ function dataToValidate<T extends AnyZodObject>(
     return schemaData.hasEffects || schemaData.opts.errors === true
       ? schemaData.entityInfo.defaultEntity
       : undefined;
-  } else if (strict && parsed.dataWithoutDefaults) {
-    return parsed.dataWithoutDefaults;
+  } else if (strict && parsed.partialData) {
+    return parsed.partialData;
   } else return parsed.data;
 }
 
@@ -321,7 +333,7 @@ function parseFormData<T extends AnyZodObject>(
   formData: FormData,
   schemaData: SchemaData<T>,
   options?: SuperValidateOptions<T>
-): ParsedData {
+): ParsedData<z.infer<T>> {
   function tryParseSuperJson() {
     if (formData.has('__superform_json')) {
       try {
@@ -329,7 +341,7 @@ function parseFormData<T extends AnyZodObject>(
           formData.getAll('__superform_json').join('') ?? ''
         );
         if (typeof output === 'object') {
-          return output as z.infer<UnwrapEffects<T>>;
+          return output as Record<string, unknown>;
         }
       } catch {
         //
@@ -341,31 +353,29 @@ function parseFormData<T extends AnyZodObject>(
   const data = tryParseSuperJson();
   const id = formData.get('__superform_id')?.toString() ?? undefined;
 
-  return data
-    ? { id, data, posted: true, dataWithoutDefaults: null }
-    : {
-        id,
-        data: formDataToValidation(
-          formData,
-          schemaData,
-          options?.preprocessed,
-          false
-        ),
-        dataWithoutDefaults: formDataToValidation(
-          formData,
-          schemaData,
-          options?.preprocessed,
-          options?.strict
-        ),
-        posted: true
-      };
+  if (data) {
+    return { id, data, posted: true, partialData: null };
+  }
+
+  const parsed = formDataToValidation(
+    formData,
+    schemaData,
+    options?.preprocessed
+  );
+
+  return {
+    id,
+    data: parsed.parsed,
+    partialData: parsed.partial,
+    posted: true
+  };
 }
 
 function parseSearchParams<T extends AnyZodObject>(
   data: URL | URLSearchParams,
   schemaData: SchemaData<T>,
   options?: SuperValidateOptions<T>
-): ParsedData {
+): ParsedData<z.infer<T>> {
   if (data instanceof URL) data = data.searchParams;
 
   const convert = new FormData();
@@ -380,7 +390,7 @@ function parseSearchParams<T extends AnyZodObject>(
 }
 
 function validateResult<T extends AnyZodObject, M>(
-  parsed: ParsedData,
+  parsed: ParsedData<z.infer<T>>,
   schemaData: SchemaData<T>,
   result: SafeParseReturnType<unknown, z.infer<T>> | undefined
 ): SuperValidated<T, M> {
@@ -580,7 +590,9 @@ export async function superValidate<
 
   const schemaData = getSchemaData(schema as UnwrapEffects<T>, options);
 
-  async function tryParseFormData(request: Request) {
+  async function tryParseFormData(
+    request: Request
+  ): Promise<ParsedData<z.infer<UnwrapEffects<T>>>> {
     let formData: FormData | undefined = undefined;
     try {
       formData = await request.formData();
@@ -594,13 +606,18 @@ export async function superValidate<
         throw e;
       }
       // No data found, return an empty form
-      return { id: undefined, data: undefined, posted: false, dataWithoutDefaults: undefined };
+      return {
+        id: undefined,
+        data: undefined,
+        posted: false,
+        partialData: undefined
+      };
     }
     return parseFormData(formData, schemaData, options);
   }
 
   async function parseRequest() {
-    let parsed: ParsedData;
+    let parsed: ParsedData<z.infer<UnwrapEffects<T>>>;
 
     if (data instanceof FormData) {
       parsed = parseFormData(data, schemaData, options);
@@ -622,15 +639,19 @@ export async function superValidate<
     } else {
       parsed = {
         id: undefined,
-        data: data as Record<string, unknown>,
         posted: false,
-        dataWithoutDefaults: data as Record<string, unknown>
+        data: data as Record<string, unknown>,
+        partialData: data as Record<string, unknown>
       };
     }
 
     //////////////////////////////////////////////////////////////////////
     // This logic is shared between superValidate and superValidateSync //
-    const toValidate = dataToValidate(parsed, schemaData, options?.strict || false);
+    const toValidate = dataToValidate(
+      parsed,
+      schemaData,
+      options?.strict || false
+    );
     const result = toValidate
       ? await schemaData.originalSchema.safeParseAsync(toValidate)
       : undefined;
@@ -705,14 +726,18 @@ export function superValidateSync<
       ? parseSearchParams(data, schemaData)
       : {
           id: undefined,
-          data: data as Record<string, unknown>,
-          dataWithoutDefaults: data as Record<string, unknown>,
+          data: data as z.infer<UnwrapEffects<T>>,
+          partialData: data as z.infer<UnwrapEffects<T>>,
           posted: false
         }; // Only schema, null or undefined left
 
   //////////////////////////////////////////////////////////////////////
   // This logic is shared between superValidate and superValidateSync //
-  const toValidate = dataToValidate(parsed, schemaData, options?.strict || false);
+  const toValidate = dataToValidate(
+    parsed,
+    schemaData,
+    options?.strict || false
+  );
   const result = toValidate
     ? schemaData.originalSchema.safeParse(toValidate)
     : undefined;

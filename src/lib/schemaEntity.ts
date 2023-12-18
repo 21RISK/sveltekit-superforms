@@ -20,7 +20,8 @@ import type {
   ZodNumber,
   ZodDate,
   ZodArray,
-  ZodPipeline
+  ZodPipeline,
+  ZodBranded
 } from 'zod';
 
 import type { SuperValidateOptions } from './superValidate.js';
@@ -97,23 +98,34 @@ export function unwrapZodType(zodType: ZodTypeAny): ZodTypeInfo {
   //let i = 0;
   while (_wrapped) {
     //console.log(' '.repeat(++i * 2) + zodType.constructor.name);
-    if (zodType._def.typeName == 'ZodNullable') {
-      isNullable = true;
-      zodType = (zodType as ZodNullable<ZodTypeAny>).unwrap();
-    } else if (zodType._def.typeName == 'ZodDefault') {
-      hasDefault = true;
-      defaultValue = zodType._def.defaultValue();
-      zodType = zodType._def.innerType;
-    } else if (zodType._def.typeName == 'ZodOptional') {
-      isOptional = true;
-      zodType = (zodType as ZodOptional<ZodTypeAny>).unwrap();
-    } else if (zodType._def.typeName == 'ZodEffects') {
-      if (!effects) effects = zodType as ZodEffects<ZodTypeAny>;
-      zodType = zodType._def.schema;
-    } else if (zodType._def.typeName == 'ZodPipeline') {
-      zodType = (zodType as ZodPipeline<ZodTypeAny, ZodTypeAny>)._def.out;
-    } else {
-      _wrapped = false;
+    switch (zodType._def.typeName) {
+      case 'ZodNullable':
+        isNullable = true;
+        zodType = (zodType as ZodNullable<ZodTypeAny>).unwrap();
+        break;
+      case 'ZodDefault':
+        hasDefault = true;
+        defaultValue = zodType._def.defaultValue();
+        zodType = zodType._def.innerType;
+        break;
+      case 'ZodOptional':
+        isOptional = true;
+        zodType = (zodType as ZodOptional<ZodTypeAny>).unwrap();
+        break;
+      case 'ZodEffects':
+        if (!effects) effects = zodType as ZodEffects<ZodTypeAny>;
+        zodType = zodType._def.schema;
+        break;
+      case 'ZodPipeline':
+        zodType = (zodType as ZodPipeline<ZodTypeAny, ZodTypeAny>)._def.out;
+        break;
+      case 'ZodBranded':
+        zodType = (
+          zodType as ZodBranded<ZodTypeAny, string | number | symbol>
+        ).unwrap();
+        break;
+      default:
+        _wrapped = false;
     }
   }
 
@@ -211,11 +223,7 @@ function schemaInfo<T extends AnyZodObject>(schema: T) {
   return _mapSchema(schema, (obj) => unwrapZodType(obj));
 }
 
-export function valueOrDefault(
-  value: unknown,
-  strict: boolean,
-  schemaInfo: ZodTypeInfo
-) {
+export function valueOrDefault(value: unknown, schemaInfo: ZodTypeInfo) {
   if (value) return value;
 
   const { zodType, isNullable, isOptional, hasDefault, defaultValue } =
@@ -229,7 +237,6 @@ export function valueOrDefault(
   // so this should be ok.
   // Also make a check for strict, so empty strings from FormData can also be set here.
 
-  if (strict) return value;
   if (hasDefault) return defaultValue;
   if (isNullable) return null;
   if (isOptional) return undefined;
@@ -276,7 +283,7 @@ export function defaultValues<T extends ZodValidation<AnyZodObject>>(
   return Object.fromEntries(
     fields.map((field) => {
       const typeInfo = schemaTypeInfo[field];
-      const newValue = valueOrDefault(undefined, false, typeInfo);
+      const newValue = valueOrDefault(undefined, typeInfo);
 
       return [field, newValue];
     })
